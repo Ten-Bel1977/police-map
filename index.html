@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Police Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .marker-info { font-size: 14px; line-height: 1.5; }
+        .marker-info b { color: #333; }
+        .add-btn {
+            position: fixed; bottom: 20px; right: 20px;
+            background: #0088cc; color: white; border: none;
+            padding: 15px 20px; border-radius: 50px;
+            font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            z-index: 1000; cursor: pointer;
+        }
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5); z-index: 2000;
+            justify-content: center; align-items: center;
+            padding: 20px; box-sizing: border-box;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: white; border-radius: 16px;
+            padding: 20px; width: 100%; max-width: 420px;
+            max-height: 90vh; overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+        .modal-content h3 { margin: 0 0 15px; font-size: 18px; text-align: center; color: #333; }
+        .type-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 15px; }
+        .type-btn {
+            padding: 12px 6px; border: 2px solid #ddd;
+            border-radius: 10px; background: white;
+            font-size: 12px; font-weight: 600; cursor: pointer;
+            text-align: center; font-family: inherit;
+            color: #333; transition: all 0.15s;
+        }
+        .type-btn small { display: block; font-weight: normal; color: #888; font-size: 10px; margin-top: 3px; }
+        .type-btn.selected { border-color: #0088cc; background: #e6f4ff; color: #0088cc; }
+        .type-btn.selected small { color: #0088cc; }
+        .type-btn.owner { grid-column: 1 / -1; background: #fff8e1; border-color: #ffb300; }
+        .type-btn.owner.selected { background: #ffe082; border-color: #ff8f00; color: #333; }
+        .main-alert-fields {
+            display: none; background: #f5f5f5;
+            border-radius: 10px; padding: 12px; margin-bottom: 12px;
+        }
+        .main-alert-fields.visible { display: block; }
+        .main-alert-fields label {
+            display: block; font-size: 13px; color: #555;
+            margin-bottom: 4px; font-weight: 600;
+        }
+        .main-alert-row { display: flex; gap: 8px; margin-bottom: 10px; }
+        .main-alert-row input[type="number"], .main-alert-row select {
+            flex: 1; padding: 10px; border: 1px solid #ddd;
+            border-radius: 8px; font-family: inherit; font-size: 14px;
+            background: white;
+        }
+        .color-input {
+            width: 100%; height: 44px;
+            border: 1px solid #ddd; border-radius: 8px;
+            cursor: pointer; padding: 2px;
+        }
+        .comment-input {
+            width: 100%; box-sizing: border-box;
+            padding: 10px; border: 1px solid #ddd;
+            border-radius: 8px; font-family: inherit;
+            font-size: 14px; margin-bottom: 12px;
+            resize: vertical; min-height: 50px;
+        }
+        .modal-actions { display: flex; gap: 8px; }
+        .btn-primary, .btn-secondary {
+            flex: 1; padding: 12px; border: none;
+            border-radius: 10px; font-size: 15px;
+            font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        .btn-primary { background: #0088cc; color: white; }
+        .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-secondary { background: #eee; color: #333; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <button class="add-btn" onclick="addMarker()">➕ Добавить метку</button>
+
+    <div id="typeModal" class="modal-overlay">
+        <div class="modal-content">
+            <h3>Выберите тип метки</h3>
+            <div class="type-buttons" id="typeButtons">
+                <button class="type-btn" data-type="PatrolLocal">PatrolLocal<small>⏱ 1.5 часа</small></button>
+                <button class="type-btn" data-type="PatrolNacional">PatrolNacional<small>⏱ 1.5 часа</small></button>
+                <button class="type-btn" data-type="MotoAlert!!!">MotoAlert!!!<small>⏱ 1.5 часа</small></button>
+                <button class="type-btn" data-type="GuardiaCivil">GuardiaCivil<small>⏱ 1.5 часа</small></button>
+                <button class="type-btn" data-type="PostLocal">PostLocal<small>⏱ 24 часа</small></button>
+                <button class="type-btn" data-type="PostNacional">PostNacional<small>⏱ 24 часа</small></button>
+                <button class="type-btn" data-type="PostMotoAlert!!!">PostMotoAlert!!!<small>⏱ 24 часа</small></button>
+                <button class="type-btn owner" id="mainAlertBtn" data-type="MainAlert" style="display:none;">👑 MainAlert<small>Только владелец · своё время и цвет</small></button>
+            </div>
+
+            <div id="mainAlertFields" class="main-alert-fields">
+                <label>⏱ Время действия</label>
+                <div class="main-alert-row">
+                    <input type="number" id="durationValue" value="1" min="1">
+                    <select id="durationUnit">
+                        <option value="1">минут</option>
+                        <option value="60" selected>часов</option>
+                        <option value="1440">дней</option>
+                    </select>
+                </div>
+                <label>🎨 Цвет метки</label>
+                <input type="color" id="mainAlertColor" class="color-input" value="#a020f0">
+            </div>
+
+            <textarea id="commentInput" class="comment-input" rows="2" placeholder="Комментарий (необязательно)"></textarea>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="closeTypeModal()">Отмена</button>
+                <button class="btn-primary" id="submitBtn" disabled onclick="submitMarker()">Поставить</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const API_URL = 'http://localhost:3000';
+        // ⚠️ ЗАМЕНИ НА СВОЙ TELEGRAM ID (должен совпадать с server.js)
+        const OWNER_ID = '6637894231';
+
+        const tg = window.Telegram.WebApp;
+        if (tg) { tg.ready(); tg.expand(); }
+
+        // Определяем пользователя
+        let currentUserId = '6637894231';
+        let currentUserName = 'Гость';
+        let inTelegram = false;
+        try {
+            if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe
+                && window.Telegram.WebApp.initDataUnsafe.user) {
+                const u = window.Telegram.WebApp.initDataUnsafe.user;
+                currentUserId = String(u.id);
+                currentUserName = u.first_name + (u.last_name ? ' ' + u.last_name : '');
+                inTelegram = true;
+            }
+        } catch (e) { console.warn('Telegram init error:', e); }
+
+        // Владелец: либо по ID, либо в браузере (для тестов)
+        function isOwner() {
+            if (!inTelegram) return true;
+            return String(currentUserId) === String(OWNER_ID);
+        }
+
+        console.log('ID:', currentUserId, '| Владелец?', isOwner(), '| В Telegram?', inTelegram);
+
+        // Показываем кнопку MainAlert
+        if (isOwner()) {
+            const btn = document.getElementById('mainAlertBtn');
+            if (btn) btn.style.display = 'block';
+        }
+
+        // === ЗВУК ===
+        let audioCtx = null;
+        function unlockAudio() {
+            if (!audioCtx) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) { console.warn('AudioContext error:', e); }
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+        // Разблокируем звук при первом взаимодействии
+        ['pointerdown', 'click', 'touchstart', 'keydown'].forEach(evt => {
+            document.addEventListener(evt, unlockAudio, { passive: true });
+        });
+
+        function playBeep(freq) {
+            unlockAudio();
+            if (!audioCtx) { console.warn('AudioContext недоступен'); return; }
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sine';
+                osc.frequency.value = freq || 880;
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.35);
+            } catch (e) { console.error('Beep error:', e); }
+        }
+
+        // === КАРТА ===
+        L.TileLayer.prototype.options.referrerPolicy = 'strict-origin-when-cross-origin';
+        const map = L.map('map', { doubleClickZoom: false }).setView([28.2916, -16.6291], 10);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let currentLayer = L.layerGroup().addTo(map);
+        let pendingLatLng = null;
+        let selectedType = null;
+
+        async function loadMarkers() {
+            try {
+                const res = await fetch(API_URL + '/api/markers');
+                const markers = await res.json();
+                currentLayer.clearLayers();
+
+                markers.forEach(m => {
+                    const color = m.color || '#888';
+                    const circle = L.circleMarker([m.lat, m.lng], {
+                        color: color,
+                        radius: 10,
+                        fillColor: color,
+                        fillOpacity: 0.85,
+                        weight: 2
+                    }).addTo(currentLayer);
+
+                    const popup = `
+                        <div class="marker-info">
+                            <b style="color:${color};">${m.type}</b><br>
+                            Автор: ${m.userName}<br>
+                            Поставлено: ${new Date(m.createdAt).toLocaleString()}<br>
+                            Истекает: ${new Date(m.expiresAt).toLocaleString()}<br>
+                            Комментарий: ${m.comment || '—'}
+                        </div>
+                    `;
+                    circle.bindPopup(popup);
+                });
+            } catch (e) {
+                console.error('Ошибка загрузки:', e);
+            }
+        }
+
+        function openTypeModal(lat, lng) {
+            pendingLatLng = { lat, lng };
+            selectedType = null;
+            document.getElementById('commentInput').value = '';
+            document.getElementById('submitBtn').disabled = true;
+            document.getElementById('mainAlertFields').classList.remove('visible');
+            document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('selected'));
+            document.getElementById('typeModal').classList.add('active');
+        }
+
+        function closeTypeModal() {
+            document.getElementById('typeModal').classList.remove('active');
+            pendingLatLng = null;
+            selectedType = null;
+        }
+
+        document.querySelectorAll('.type-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedType = btn.dataset.type;
+                document.getElementById('submitBtn').disabled = false;
+
+                const fields = document.getElementById('mainAlertFields');
+                if (selectedType === 'MainAlert') {
+                    fields.classList.add('visible');
+                } else {
+                    fields.classList.remove('visible');
+                }
+            });
+        });
+
+        async function submitMarker() {
+            if (!pendingLatLng || !selectedType) return;
+
+            const { lat, lng } = pendingLatLng;
+            const type = selectedType;
+            const comment = document.getElementById('commentInput').value || '';
+
+            const payload = {
+                userId: currentUserId,
+                userName: currentUserName,
+                lat, lng, type, comment
+            };
+
+            if (type === 'MainAlert') {
+                const value = parseInt(document.getElementById('durationValue').value, 10) || 1;
+                const unit = parseInt(document.getElementById('durationUnit').value, 10);
+                payload.durationMinutes = value * unit;
+                payload.color = document.getElementById('mainAlertColor').value;
+            }
+
+            closeTypeModal();
+
+            try {
+                const res = await fetch(API_URL + '/api/markers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    playBeep(220);
+                    alert('Ошибка: ' + (err.error || 'неизвестная'));
+                    return;
+                }
+
+                const newMarker = await res.json();
+                playBeep(880);
+                alert(
+                    '✅ Метка добавлена!\n\n' +
+                    'Тип: ' + newMarker.type + '\n' +
+                    'Цвет: ' + newMarker.color + '\n' +
+                    'Истекает: ' + new Date(newMarker.expiresAt).toLocaleString()
+                );
+                loadMarkers();
+            } catch (e) {
+                console.error(e);
+                playBeep(220);
+                alert('Не удалось связаться с сервером');
+            }
+        }
+
+        function addMarker() {
+            alert('Нажмите ДВА РАЗА по карте в нужном месте, чтобы поставить метку.');
+        }
+
+        map.on('dblclick', function (e) {
+            openTypeModal(e.latlng.lat, e.latlng.lng);
+        });
+
+        loadMarkers();
+        setInterval(loadMarkers, 60000);
+    </script>
+</body>
+</html>
